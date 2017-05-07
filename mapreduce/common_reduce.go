@@ -52,6 +52,8 @@ func doReduce(
 	//
 	kvs := make(map[string][]string)
 	for i := 0; i < nMap; i++ {
+		//get the KeyValue of mrtmp-jobName-i-reduceTaskNumber, then put them into kvs
+		//example : put the key of mrtmp.test-0-0, mrtmp.test-1-0, mrtmp.test-2-0 into outputfile(mrtmp-test-0)
 		fileName := reduceName(jobName, i, reduceTaskNumber)
 		file, err := os.Open(fileName)
 		defer file.Close()
@@ -66,6 +68,7 @@ func doReduce(
 			if err != nil {
 				break
 			}
+			// key -> {value1, value2, value3, ... }
 			kvs[kv.Key] = append(kvs[kv.Key], kv.Value)
 		}
 	}
@@ -83,6 +86,7 @@ func doReduce(
 	}
 	enc := json.NewEncoder(file)
 	for _, k := range keys {
+		//reduceF: (key, {value1, value2, ...}) -> (key, value)
 		enc.Encode(KeyValue{k, reduceF(k, kvs[k])})
 	}
 }
