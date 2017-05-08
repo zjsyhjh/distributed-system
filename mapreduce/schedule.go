@@ -2,6 +2,8 @@ package mapreduce
 
 import "fmt"
 
+import "sync"
+
 //
 // schedule() starts and waits for all tasks in the given phase (Map
 // or Reduce). the mapFiles argument holds the names of the files that
@@ -13,17 +15,17 @@ import "fmt"
 //
 func schedule(jobName string, mapFiles []string, nReduce int, phase jobPhase, registerChan chan string) {
 	var ntasks int
-	var n_other int // number of inputs (for reduce) or outputs (for map)
+	var nOther int // number of inputs (for reduce) or outputs (for map)
 	switch phase {
 	case mapPhase:
 		ntasks = len(mapFiles)
-		n_other = nReduce
+		nOther = nReduce
 	case reducePhase:
 		ntasks = nReduce
-		n_other = len(mapFiles)
+		nOther = len(mapFiles)
 	}
 
-	fmt.Printf("Schedule: %v %v tasks (%d I/Os)\n", ntasks, phase, n_other)
+	fmt.Printf("Schedule: %v %v tasks (%d I/Os)\n", ntasks, phase, nOther)
 
 	// All ntasks tasks have to be scheduled on workers, and only once all of
 	// them have been completed successfully should the function return.
@@ -32,5 +34,38 @@ func schedule(jobName string, mapFiles []string, nReduce int, phase jobPhase, re
 	//
 	// TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO
 	//
+	var waitGroup sync.WaitGroup
+	for taskID := 0; taskID < ntasks; taskID++ {
+
+		waitGroup.Add(1)
+
+		go func(taskID int) {
+			defer waitGroup.Done()
+
+			var args DoTaskArgs
+			args.JobName = jobName
+			args.Phase = phase
+			args.TaskNumber = taskID
+			args.NumOtherPhase = nOther
+			if args.Phase == mapPhase {
+				args.File = mapFiles[taskID]
+			}
+
+			for {
+				wkAddr := <-registerChan
+				ok := call(wkAddr, "Worker.DoTask", &args, nil)
+				if ok {
+					go func() {
+						registerChan <- wkAddr
+					}()
+					break
+				}
+			}
+
+		}(taskID)
+	}
+
+	waitGroup.Wait()
+
 	fmt.Printf("Schedule: %v phase done\n", phase)
 }
