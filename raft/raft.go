@@ -18,12 +18,10 @@ package raft
 //
 
 import "sync"
-import "labrpc"
+import "github.com/zjsyhjh/distributed-system/labrpc"
 
 // import "bytes"
 // import "encoding/gob"
-
-
 
 //
 // as each Raft peer becomes aware that successive log entries are
@@ -93,15 +91,21 @@ func (rf *Raft) readPersist(data []byte) {
 	}
 }
 
-
-
-
 //
 // example RequestVote RPC arguments structure.
 // field names must start with capital letters!
 //
 type RequestVoteArgs struct {
 	// Your data here (2A, 2B).
+	// according to raft paper figure 2 : RequestVote RPC
+	// term candidate’s term
+	// candidateId candidate requesting vote
+	// lastLogIndex index of candidate's last log entry
+	// lastLogTerm term of candidate's last log entry
+	Term         int
+	CandidateID  int
+	LastLogIndex int
+	LastLogTerm  int
 }
 
 //
@@ -110,6 +114,11 @@ type RequestVoteArgs struct {
 //
 type RequestVoteReply struct {
 	// Your data here (2A).
+	// according to raft paper figure 2 : RequestVote RPC
+	// term currentTerm, for candidate to update itself
+	// voteGranted true means candidate received vote
+	Term        int
+	VoteGranted int
 }
 
 //
@@ -153,7 +162,6 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	return ok
 }
 
-
 //
 // the service using Raft (e.g. a k/v server) wants to start
 // agreement on the next command to be appended to Raft's log. if this
@@ -173,7 +181,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	isLeader := true
 
 	// Your code here (2B).
-
 
 	return index, term, isLeader
 }
@@ -210,7 +217,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
-
 
 	return rf
 }
