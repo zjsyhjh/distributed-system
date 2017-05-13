@@ -122,6 +122,18 @@ type RequestVoteReply struct {
 }
 
 //
+// add AppendEntriesArgs RPC struct
+//
+type AppendEntriesArgs struct {
+}
+
+//
+// add AppendEntriesReply struct
+//
+type AppendEntriesReply struct {
+}
+
+//
 // example RequestVote RPC handler.
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
