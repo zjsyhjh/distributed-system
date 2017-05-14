@@ -18,8 +18,9 @@ package raft
 //
 
 import "sync"
-import "github.com/zjsyhjh/distributed-system/labrpc"
 import "time"
+import "math/rand"
+import "github.com/zjsyhjh/distributed-system/labrpc"
 
 // import "bytes"
 // import "encoding/gob"
@@ -75,12 +76,13 @@ type Raft struct {
 	nextIndex  []int // for each server, index of next log entry to send to that server(initialized to leader last log index + 1)
 	matchIndex []int // for each server, index of the highest log entry known to be replicated on server(initialized to 0, increases monotonically)
 
-	status           Status // Follower, candidate or leader
-	votedCount       int    // vote count
-	heartbeatCh      chan bool
-	voteResultCh     chan bool
-	electionTimeout  time.Duration
-	heartbeatTimeout time.Duration
+	status                    Status // Follower, candidate or leader
+	votedCount                int    // vote count
+	heartbeatCh               chan bool
+	voteResultCh              chan bool
+	electionTimeout           time.Duration
+	heartbeatTimeout          time.Duration
+	randomizedElectionTimeout time.Duration
 }
 
 // return currentTerm and whether this server
@@ -240,9 +242,59 @@ func (rf *Raft) Kill() {
 	// Your code here, if desired.
 }
 
+//my code for lab-2
+
+// reset leader election timeout
+// [electionTimeout, 2 * electionTimeout - 1]
+func (rf *Raft) resetElectionTimeout() time.Duration {
+	rand.Seed(time.Now().UTC().UnixNano())
+	rf.randomizedElectionTimeout = rf.electionTimeout + time.Duration(rand.Int63n(rf.electionTimeout.Nanoseconds()))
+	return rf.randomizedElectionTimeout
+}
+
+// candidate elect leader
+func (rf *Raft) candidate() {
+
+}
+
+// leader broadcast heartbeat each heartbeatTimeout
+func (rf *Raft) leader() {
+	tick := time.Tick(rf.heartbeatTimeout)
+	for {
+		select {
+		case <-tick:
+			DPrintf("leader-%v begin to broadcast heartbeat\n", rf.me)
+			go rf.broadcastHeartbeat()
+
+		}
+	}
+}
+
+// leader broadcast heartbeat to follower or candidate
+func (rf *Raft) broadcastHeartbeat() {
+
+}
+
 func (rf *Raft) backgroundLoop() {
 	for {
-
+		switch rf.status {
+		case FOLLOWER:
+			DPrintf("I'm follower-%v\n", rf.me)
+			DPrintf("Starting election timeout %v\n", rf.resetElectionTimeout())
+			// wait for leader's heartbeat or election timeout
+			select {
+			case <-rf.heartbeatCh:
+			case <-time.After(rf.randomizedElectionTimeout):
+				DPrintf("election timeout %v\n", rf.randomizedElectionTimeout)
+				rf.convertToCandidate()
+			}
+		case CANDIDATE:
+			DPrintf("I'm candidate-%v\n", rf.me)
+			rf.candidate()
+		case LEADER:
+			DPrintf("I'm leader-%v\n", rf.me)
+			rf.leader()
+		}
 	}
 }
 
