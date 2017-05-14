@@ -153,7 +153,7 @@ type RequestVoteReply struct {
 	// term currentTerm, for candidate to update itself
 	// voteGranted true means candidate received vote
 	Term        int
-	VoteGranted int
+	VoteGranted bool
 }
 
 //
@@ -162,13 +162,15 @@ type RequestVoteReply struct {
 type AppendEntriesArgs struct {
 	Term     int
 	LeaderID int
+	Entries  []Log
 }
 
 //
 // add AppendEntriesReply struct
 //
 type AppendEntriesReply struct {
-	Term int
+	Term    int
+	Success bool
 }
 
 //
@@ -176,6 +178,31 @@ type AppendEntriesReply struct {
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
+	DPrintf("peer-%v handle the RequestVote from candidate-%v\n", rf.me, args.CandidateID)
+	rf.heartbeatCh <- true
+
+	reply.Term = rf.currentTerm
+	if args.Term > rf.currentTerm {
+		rf.mu.Lock()
+		rf.currentTerm = args.Term
+		rf.status = FOLLOWER
+		rf.mu.Unlock()
+		return
+	}
+
+	if args.Term < rf.currentTerm {
+		// previous request, no reply
+		reply.VoteGranted = false
+	} else if rf.voteFor != -1 && rf.voteFor != args.CandidateID {
+		DPrintf("follower-%v votedFor candidate-%v\n", rf.me, rf.voteFor)
+		reply.VoteGranted = false
+	} else if args.LastLogIndex < rf.commitIndex || args.LastLogTerm < rf.currentTerm {
+		DPrintf("candidate-%v's log is not as least as up-to-date as receiver's log\n", args.CandidateID)
+		reply.VoteGranted = false
+	} else {
+		reply.VoteGranted = true
+	}
+	DPrintf("RequestVote done.\n")
 }
 
 //
@@ -214,6 +241,23 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 
 // my code for AppendEntries
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+	reply.Term = rf.currentTerm
+
+	if args.Term < rf.currentTerm {
+		reply.Success = false
+		return
+	} else if args.Term > rf.currentTerm {
+		rf.mu.Lock()
+		rf.currentTerm = args.Term
+		rf.status = FOLLOWER
+		rf.mu.Unlock()
+	}
+
+	rf.heartbeatCh <- true
+	if len(args.Entries) == 0 {
+		reply.Success = true
+		return
+	}
 }
 
 // my code for sendAppendEntries
@@ -285,7 +329,37 @@ func (rf *Raft) resetElectionTimeout() time.Duration {
 
 // candidate broadcast and request for vote
 func (rf *Raft) broadcastRequestVote() {
+	for server := range rf.peers {
+		if server != rf.me && rf.status == CANDIDATE {
+			var args RequestVoteArgs
+			args.Term = rf.currentTerm
+			args.CandidateID = rf.me
+			args.LastLogIndex = rf.commitIndex
+			args.LastLogTerm = rf.log[rf.commitIndex].Term
 
+			var reply RequestVoteReply
+			DPrintf("candidate-%v send RequestVote to peer-%v\n", rf.me, server)
+			ok := rf.sendRequestVote(server, &args, &reply)
+			if ok {
+				if reply.Term > rf.currentTerm {
+					rf.mu.Lock()
+					rf.currentTerm = reply.Term
+					rf.status = FOLLOWER
+					rf.mu.Unlock()
+					break
+				} else if reply.VoteGranted {
+					rf.votedCount++
+				}
+			} else {
+				//fail, retry ?
+			}
+		}
+	}
+	if rf.votedCount > len(rf.peers)/2 {
+		rf.voteResultCh <- true
+	} else {
+		rf.voteResultCh <- false
+	}
 }
 
 // candidate elect leader
