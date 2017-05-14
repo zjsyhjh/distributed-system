@@ -283,9 +283,52 @@ func (rf *Raft) resetElectionTimeout() time.Duration {
 	return rf.randomizedElectionTimeout
 }
 
+// candidate broadcast and request for vote
+func (rf *Raft) broadcastRequestVote() {
+
+}
+
 // candidate elect leader
 func (rf *Raft) candidate() {
+	hasLeader := false
+	for {
+		select {
+		case <-rf.heartbeatCh:
+			hasLeader = true
+		default:
+		}
+		if hasLeader {
+			break
+		}
 
+		// first, increase currentTerm, vote
+		rf.mu.Lock()
+		rf.currentTerm++
+		rf.voteFor = rf.me
+		rf.votedCount = 1
+		rf.mu.Unlock()
+
+		// second, broadcast and requestforvote
+		go rf.broadcastRequestVote()
+
+		//third, wait for result
+		select {
+		case result := <-rf.voteResultCh:
+			if result {
+				hasLeader = true
+				rf.convertToLeader()
+			} else {
+				//fail?
+			}
+		case <-time.After(rf.resetElectionTimeout()):
+			go func() {
+				<-rf.voteResultCh
+			}()
+		}
+		if hasLeader {
+			break
+		}
+	}
 }
 
 // leader broadcast heartbeat each heartbeatTimeout
@@ -315,7 +358,10 @@ func (rf *Raft) broadcastHeartbeat() {
 			if ok {
 				if reply.Term > rf.currentTerm {
 					//convert to follower
-					rf.setTermAndConvertToFollower(reply.Term)
+					rf.mu.Lock()
+					rf.currentTerm = reply.Term
+					rf.status = FOLLOWER
+					rf.mu.Unlock()
 					break
 				}
 			} else {
