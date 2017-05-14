@@ -19,6 +19,7 @@ package raft
 
 import "sync"
 import "github.com/zjsyhjh/distributed-system/labrpc"
+import "time"
 
 // import "bytes"
 // import "encoding/gob"
@@ -35,6 +36,20 @@ type ApplyMsg struct {
 	Snapshot    []byte // ignore for lab2; only used in lab3
 }
 
+type Status int
+
+const (
+	FOLLOWER Status = iota
+	CANDIDATE
+	LEADER
+)
+
+type Log struct {
+	index int
+	Term  int
+	Cmd   interface{}
+}
+
 //
 // A Go object implementing a single Raft peer.
 //
@@ -48,6 +63,24 @@ type Raft struct {
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
 
+	// according to raft paper's Figure 2 : State
+	// persistent state on all servers
+	currentTerm int   // latest term server has been (initilized to 0 on first boot, increases monotonically)
+	voteFor     int   // candidateId that received vote in current term(or null if none)
+	log         []Log // log entries; each entry contains command for state machine, and term when entry was received by leader(first index is 1)
+	// volatile state on all servers
+	commitIndex int // index of highest log entry known to be commited(initilized to 0, increases monotonically)
+	lastApplied int // inded of highest log entry appiled to state machine(initialized to 0, increases monotonically)
+	// volatile state on leader
+	nextIndex  []int // for each server, index of next log entry to send to that server(initialized to leader last log index + 1)
+	matchIndex []int // for each server, index of the highest log entry known to be replicated on server(initialized to 0, increases monotonically)
+
+	status           Status // Follower, candidate or leader
+	votedCount       int    // vote count
+	heartbeatCh      chan bool
+	voteResultCh     chan bool
+	electionTimeout  time.Duration
+	heartbeatTimeout time.Duration
 }
 
 // return currentTerm and whether this server
@@ -207,6 +240,12 @@ func (rf *Raft) Kill() {
 	// Your code here, if desired.
 }
 
+func (rf *Raft) backgroundLoop() {
+	for {
+
+	}
+}
+
 //
 // the service or tester wants to create a Raft server. the ports
 // of all the Raft servers (including this one) are in peers[]. this
@@ -226,9 +265,21 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 
 	// Your initialization code here (2A, 2B, 2C).
+	rf.currentTerm = 0
+	rf.status = FOLLOWER
+	rf.voteFor = -1
+	rf.commitIndex = 0
+	rf.lastApplied = 0
+	rf.log = []Log{{index: 0, Term: 0}}
+	rf.heartbeatCh = make(chan bool, 1)
+	rf.voteResultCh = make(chan bool)
+	rf.heartbeatTimeout = 500 * time.Millisecond
+	rf.electionTimeout = 1000 * time.Millisecond
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
+	// start goroutine
+	go rf.backgroundLoop()
 
 	return rf
 }
