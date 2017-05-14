@@ -160,12 +160,15 @@ type RequestVoteReply struct {
 // add AppendEntriesArgs RPC struct
 //
 type AppendEntriesArgs struct {
+	Term     int
+	LeaderID int
 }
 
 //
 // add AppendEntriesReply struct
 //
 type AppendEntriesReply struct {
+	Term int
 }
 
 //
@@ -209,6 +212,16 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	return ok
 }
 
+// my code for AppendEntries
+func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+}
+
+// my code for sendAppendEntries
+func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
+	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+	return ok
+}
+
 //
 // the service using Raft (e.g. a k/v server) wants to start
 // agreement on the next command to be appended to Raft's log. if this
@@ -244,6 +257,24 @@ func (rf *Raft) Kill() {
 
 //my code for lab-2
 
+func (rf *Raft) convertToCandidate() {
+	rf.mu.Lock()
+	rf.status = CANDIDATE
+	rf.mu.Unlock()
+}
+
+func (rf *Raft) convertToFollower() {
+	rf.mu.Lock()
+	rf.status = FOLLOWER
+	rf.mu.Unlock()
+}
+
+func (rf *Raft) convertToLeader() {
+	rf.mu.Lock()
+	rf.status = LEADER
+	rf.mu.Unlock()
+}
+
 // reset leader election timeout
 // [electionTimeout, 2 * electionTimeout - 1]
 func (rf *Raft) resetElectionTimeout() time.Duration {
@@ -272,7 +303,26 @@ func (rf *Raft) leader() {
 
 // leader broadcast heartbeat to follower or candidate
 func (rf *Raft) broadcastHeartbeat() {
+	for server := range rf.peers {
+		if server != rf.me && rf.status == LEADER {
+			var args AppendEntriesArgs
+			args.Term = rf.currentTerm
+			args.LeaderID = rf.me
 
+			var reply AppendEntriesReply
+			DPrintf("leader-%v send heartbeat to follower-%v\n", rf.me, server)
+			ok := rf.sendAppendEntries(server, &args, &reply)
+			if ok {
+				if reply.Term > rf.currentTerm {
+					//convert to follower
+					rf.setTermAndConvertToFollower(reply.Term)
+					break
+				}
+			} else {
+				//fail, retry?
+			}
+		}
+	}
 }
 
 func (rf *Raft) backgroundLoop() {
