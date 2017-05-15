@@ -137,8 +137,9 @@ type RequestVoteArgs struct {
 	// candidateId candidate requesting vote
 	// lastLogIndex index of candidate's last log entry
 	// lastLogTerm term of candidate's last log entry
-	Term         int
-	CandidateID  int
+	Term        int
+	CandidateID int
+	// log replicated
 	LastLogIndex int
 	LastLogTerm  int
 }
@@ -178,31 +179,25 @@ type AppendEntriesReply struct {
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
-	DPrintf("peer-%v handle the RequestVote from candidate-%v\n", rf.me, args.CandidateID)
+	DPrintf("peer-%v handle the RquestVote from candidate-%v\n", rf.me, args.CandidateID)
 	rf.heartbeatCh <- true
 
 	reply.Term = rf.currentTerm
-	if args.Term > rf.currentTerm {
-		rf.mu.Lock()
-		rf.currentTerm = args.Term
-		rf.status = FOLLOWER
-		rf.mu.Unlock()
-		return
-	}
 
-	if args.Term < rf.currentTerm {
+	DPrintf("peer-%v's term is %v, candidate-%v's term is %v\b", rf.me, rf.currentTerm, args.CandidateID, args.Term)
+	if args.Term > rf.currentTerm {
+		reply.VoteGranted = true
+		rf.resetTermAndToFollower(args.Term)
+	} else if args.Term < rf.currentTerm {
 		// previous request, no reply
 		reply.VoteGranted = false
 	} else if rf.voteFor != -1 && rf.voteFor != args.CandidateID {
 		DPrintf("follower-%v votedFor candidate-%v\n", rf.me, rf.voteFor)
 		reply.VoteGranted = false
-	} else if args.LastLogIndex < rf.commitIndex || args.LastLogTerm < rf.currentTerm {
-		DPrintf("candidate-%v's log is not as least as up-to-date as receiver's log\n", args.CandidateID)
-		reply.VoteGranted = false
 	} else {
 		reply.VoteGranted = true
 	}
-	DPrintf("RequestVote done.\n")
+	DPrintf("reply.VoteGrand = %v, RequestVote done.\n", reply.VoteGranted)
 }
 
 //
@@ -241,20 +236,19 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 
 // my code for AppendEntries
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+	DPrintf("peer-%v append entries from leader-%v\n", rf.me, args.LeaderID)
+
 	reply.Term = rf.currentTerm
 
-	if args.Term < rf.currentTerm {
+	if args.Term > rf.currentTerm {
+		rf.resetTermAndToFollower(args.Term)
+	} else if args.Term < rf.currentTerm {
 		reply.Success = false
 		return
-	} else if args.Term > rf.currentTerm {
-		rf.mu.Lock()
-		rf.currentTerm = args.Term
-		rf.status = FOLLOWER
-		rf.mu.Unlock()
 	}
-
 	rf.heartbeatCh <- true
 	if len(args.Entries) == 0 {
+		DPrintf("peer-%v, lalala\n", rf.me)
 		reply.Success = true
 		return
 	}
@@ -319,6 +313,21 @@ func (rf *Raft) convertToLeader() {
 	rf.mu.Unlock()
 }
 
+func (rf *Raft) resetTermAndToFollower(term int) {
+	rf.mu.Lock()
+	rf.currentTerm = term
+	rf.status = FOLLOWER
+	rf.mu.Unlock()
+}
+
+func (rf *Raft) vote(server int) {
+	rf.mu.Lock()
+	rf.currentTerm++
+	rf.voteFor = server
+	rf.votedCount = 1
+	rf.mu.Unlock()
+}
+
 // reset leader election timeout
 // [electionTimeout, 2 * electionTimeout - 1]
 func (rf *Raft) resetElectionTimeout() time.Duration {
@@ -334,18 +343,14 @@ func (rf *Raft) broadcastRequestVote() {
 			var args RequestVoteArgs
 			args.Term = rf.currentTerm
 			args.CandidateID = rf.me
-			args.LastLogIndex = rf.commitIndex
-			args.LastLogTerm = rf.log[rf.commitIndex].Term
 
 			var reply RequestVoteReply
 			DPrintf("candidate-%v send RequestVote to peer-%v\n", rf.me, server)
 			ok := rf.sendRequestVote(server, &args, &reply)
 			if ok {
+				DPrintf("candidate-%v\n", rf.me)
 				if reply.Term > rf.currentTerm {
-					rf.mu.Lock()
-					rf.currentTerm = reply.Term
-					rf.status = FOLLOWER
-					rf.mu.Unlock()
+					rf.resetTermAndToFollower(reply.Term)
 					break
 				} else if reply.VoteGranted {
 					rf.votedCount++
@@ -355,15 +360,15 @@ func (rf *Raft) broadcastRequestVote() {
 			}
 		}
 	}
-	if rf.votedCount > len(rf.peers)/2 {
+	if rf.votedCount > int(len(rf.peers)/2) {
 		rf.voteResultCh <- true
 	} else {
 		rf.voteResultCh <- false
 	}
 }
 
-// candidate elect leader
-func (rf *Raft) candidate() {
+// candidat -> elect  leader
+func (rf *Raft) leaderElection() {
 	hasLeader := false
 	for {
 		select {
@@ -371,16 +376,13 @@ func (rf *Raft) candidate() {
 			hasLeader = true
 		default:
 		}
+
 		if hasLeader {
 			break
 		}
 
 		// first, increase currentTerm, vote
-		rf.mu.Lock()
-		rf.currentTerm++
-		rf.voteFor = rf.me
-		rf.votedCount = 1
-		rf.mu.Unlock()
+		rf.vote(rf.me)
 
 		// second, broadcast and requestforvote
 		go rf.broadcastRequestVote()
@@ -390,9 +392,8 @@ func (rf *Raft) candidate() {
 		case result := <-rf.voteResultCh:
 			if result {
 				hasLeader = true
+				DPrintf("candidate-%v convert to leader\n", rf.me)
 				rf.convertToLeader()
-			} else {
-				//fail?
 			}
 		case <-time.After(rf.resetElectionTimeout()):
 			go func() {
@@ -432,10 +433,7 @@ func (rf *Raft) broadcastHeartbeat() {
 			if ok {
 				if reply.Term > rf.currentTerm {
 					//convert to follower
-					rf.mu.Lock()
-					rf.currentTerm = reply.Term
-					rf.status = FOLLOWER
-					rf.mu.Unlock()
+					rf.resetTermAndToFollower(reply.Term)
 					break
 				}
 			} else {
@@ -460,7 +458,7 @@ func (rf *Raft) backgroundLoop() {
 			}
 		case CANDIDATE:
 			DPrintf("I'm candidate-%v\n", rf.me)
-			rf.candidate()
+			rf.leaderElection()
 		case LEADER:
 			DPrintf("I'm leader-%v\n", rf.me)
 			rf.leader()
