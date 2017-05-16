@@ -74,20 +74,17 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 	reply.Term = rf.currentTerm
 
-	DPrintf("peer-%v's term is %v, candidate-%v's term is %v\b", rf.me, rf.currentTerm, args.CandidateID, args.Term)
 	if args.Term > rf.currentTerm {
 		DPrintf("args.term is %v, server's currentTerm is %v\n", args.Term, rf.currentTerm)
 		DPrintf("server-%v resetTerm and convert to follower\n", rf.me)
 		rf.resetTermAndToFollower(args.Term)
 	}
-
-	rf.heartbeatCh <- true //avoid electiontimeout
-
+	//
 	if args.Term < rf.currentTerm {
 		// previous request, no reply
 		reply.VoteGranted = false
 	} else if rf.voteFor != -1 && rf.voteFor != args.CandidateID {
-		DPrintf("follower-%v votedFor candidate-%v\n", rf.me, rf.voteFor)
+		DPrintf("server-%v votedFor candidate-%v\n", rf.me, rf.voteFor)
 		reply.VoteGranted = false
 	} else if rf.commitIndex != 0 && (args.LastLogTerm < rf.currentTerm || args.LastLogIndex < rf.commitIndex) {
 		// rf.commitIndex equals 0 means no logs
@@ -99,6 +96,10 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.mu.Unlock()
 		reply.VoteGranted = true
 	}
+	//received vote request
+	go func() {
+		rf.voteCh <- true
+	}()
 	DPrintf("reply.VoteGrand = %v, RequestVote done.\n", reply.VoteGranted)
 }
 
@@ -126,7 +127,10 @@ func (rf *Raft) broadcastRequestVote() {
 			}
 		}
 	}
+	DPrintf("broadcastRequestVote done. candidate-%v's votedCount is %v\n", rf.me, rf.votedCount)
 	if rf.votedCount > len(rf.peers)/2 && rf.status == CANDIDATE {
-		rf.voteResultCh <- true
+		go func() {
+			rf.voteResultCh <- true
+		}()
 	}
 }

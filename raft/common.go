@@ -55,6 +55,6 @@ func (rf *Raft) vote(server int) {
 // [electionTimeout, 2 * electionTimeout - 1]
 func (rf *Raft) resetElectionTimeout() time.Duration {
 	rand.Seed(time.Now().UTC().UnixNano())
-	rf.randomizedElectionTimeout = rf.electionTimeout + time.Duration(rand.Int63n(rf.electionTimeout.Nanoseconds()))
+	rf.randomizedElectionTimeout = rf.electionTimeout/2 + time.Duration(rand.Int63n(rf.electionTimeout.Nanoseconds()))
 	return rf.randomizedElectionTimeout
 }
