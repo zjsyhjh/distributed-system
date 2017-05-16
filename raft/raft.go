@@ -182,14 +182,14 @@ type AppendEntriesReply struct {
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	DPrintf("peer-%v handle the RquestVote from candidate-%v\n", rf.me, args.CandidateID)
-	rf.heartbeatCh <- true
 
 	reply.Term = rf.currentTerm
 
 	DPrintf("peer-%v's term is %v, candidate-%v's term is %v\b", rf.me, rf.currentTerm, args.CandidateID, args.Term)
 	if args.Term > rf.currentTerm {
-		reply.VoteGranted = true
 		rf.resetTermAndToFollower(args.Term)
+		rf.voteFor = args.CandidateID
+		reply.VoteGranted = true
 	} else if args.Term < rf.currentTerm {
 		// previous request, no reply
 		reply.VoteGranted = false
@@ -361,7 +361,7 @@ func (rf *Raft) broadcastRequestVote() {
 			}
 		}
 	}
-	if rf.votedCount > int(len(rf.peers)/2) {
+	if rf.votedCount > len(rf.peers)/2 {
 		rf.voteResultCh <- true
 	} else {
 		rf.voteResultCh <- false
@@ -381,7 +381,9 @@ func (rf *Raft) leaderElection() {
 		if hasLeader {
 			break
 		}
-
+		if rf.status != CANDIDATE {
+			break
+		}
 		// first, increase currentTerm, vote
 		rf.vote(rf.me)
 
@@ -396,10 +398,10 @@ func (rf *Raft) leaderElection() {
 				DPrintf("candidate-%v convert to leader\n", rf.me)
 				rf.convertToLeader()
 			}
+		case <-rf.heartbeatCh:
+			hasLeader = true
 		case <-time.After(rf.resetElectionTimeout()):
-			go func() {
-				<-rf.voteResultCh
-			}()
+			//leader election again
 		}
 		if hasLeader {
 			break
@@ -415,7 +417,9 @@ func (rf *Raft) leader() {
 		case <-tick:
 			DPrintf("leader-%v begin to broadcast heartbeat\n", rf.me)
 			go rf.broadcastHeartbeat()
-
+		}
+		if rf.status != LEADER {
+			break
 		}
 	}
 }
@@ -429,11 +433,14 @@ func (rf *Raft) broadcastHeartbeat() {
 			args.LeaderID = rf.me
 
 			var reply AppendEntriesReply
-			DPrintf("leader-%v send heartbeat to follower-%v\n", rf.me, server)
+			DPrintf("leader-%v send heartbeat to server-%v\n", rf.me, server)
 			ok := rf.sendAppendEntries(server, &args, &reply)
 			if ok {
 				if reply.Term > rf.currentTerm {
 					//convert to follower
+					DPrintf("leader-%v received reply from server-%v\n", rf.me, server)
+					DPrintf("reply.term is %v, larger than currentTerm %v\n", reply.Term, rf.currentTerm)
+					DPrintf("leader-%v reset term and convert to follower\n", rf.me)
 					rf.resetTermAndToFollower(reply.Term)
 					break
 				}
