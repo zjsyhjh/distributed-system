@@ -51,5 +51,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		DPrintf("server-%v reset term and convert to follower\n", rf.me)
 		rf.resetTermAndToFollower(args.Term)
 	}
-	rf.heartbeatCh <- true
+	go func() {
+		rf.heartbeatCh <- true
+	}()
 }

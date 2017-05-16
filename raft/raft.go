@@ -61,11 +61,13 @@ type Raft struct {
 	nextIndex  []int // for each server, index of next log entry to send to that server(initialized to leader last log index + 1)
 	matchIndex []int // for each server, index of the highest log entry known to be replicated on server(initialized to 0, increases monotonically)
 
-	status                    Status    // Follower, candidate or leader
-	votedCount                int       // vote count
-	heartbeatCh               chan bool //for append entries
-	voteCh                    chan bool //for vote request
-	voteResultCh              chan bool //for vote result
+	status     Status // Follower, candidate or leader
+	votedCount int    // vote count
+	// from raft paper, if election timeout elapses without receiving AppendEntries
+	// RPC from current leader or granting vote to candidate: convert to candidate
+	heartbeatCh chan bool
+	//for vote result
+	voteResultCh              chan bool
 	electionTimeout           time.Duration
 	heartbeatTimeout          time.Duration
 	randomizedElectionTimeout time.Duration
@@ -246,9 +248,7 @@ func (rf *Raft) backgroundLoop() {
 					rf.convertToCandidate()
 				}
 			case <-rf.heartbeatCh:
-			// do nothing
-			case <-rf.voteCh:
-				//do nothing
+				// do nothing
 			}
 		case CANDIDATE:
 			DPrintf("I'm candidate-%v\n", rf.me)
@@ -285,8 +285,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.commitIndex = 0
 	rf.lastApplied = 0
 	rf.log = []Log{{index: 0, Term: 0}}
-	rf.heartbeatCh = make(chan bool, 1)
-	rf.voteCh = make(chan bool)
+	rf.heartbeatCh = make(chan bool)
 	rf.voteResultCh = make(chan bool)
 	rf.heartbeatTimeout = 300 * time.Millisecond
 	rf.electionTimeout = 600 * time.Millisecond

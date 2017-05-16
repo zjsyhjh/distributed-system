@@ -98,7 +98,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	}
 	//received vote request
 	go func() {
-		rf.voteCh <- true
+		rf.heartbeatCh <- true
 	}()
 	DPrintf("reply.VoteGrand = %v, RequestVote done.\n", reply.VoteGranted)
 }
