@@ -71,6 +71,8 @@ type Raft struct {
 	electionTimeout           time.Duration
 	heartbeatTimeout          time.Duration
 	randomizedElectionTimeout time.Duration
+
+	applyCh chan ApplyMsg
 }
 
 // return currentTerm and whether this server
@@ -135,7 +137,40 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	isLeader := true
 
 	// Your code here (2B).
+	if rf.status != LEADER {
+		isLeader = false
+		return index, term, isLeader
+	}
 
+	go func(command interface{}) {
+		entry := Log{
+			Index: len(rf.log),
+			Term:  rf.currentTerm,
+			Cmd:   command,
+		}
+		//append entry
+		rf.log = append(rf.log, entry)
+		// a majority of servers agree
+		agree := rf.broadcastAppendEntries([]Log{entry})
+
+		if agree {
+			// if agree, then committed
+			rf.mu.Lock()
+			rf.commitIndex++
+			rf.lastApplied = rf.commitIndex
+			rf.nextIndex[rf.me] = len(rf.log)
+			rf.mu.Unlock()
+			msg := ApplyMsg{
+				Index:   entry.Index,
+				Command: entry.Cmd,
+			}
+			rf.applyCh <- msg
+		}
+
+	}(command)
+
+	index = len(rf.log)
+	term = rf.currentTerm
 	return index, term, isLeader
 }
 
@@ -194,6 +229,13 @@ func (rf *Raft) leaderElection() {
 
 // leader broadcast heartbeat each heartbeatTimeout
 func (rf *Raft) leader() {
+	maxIndex := len(rf.log)
+	// init
+	for server := range rf.peers {
+		rf.nextIndex[server] = maxIndex
+		rf.matchIndex[server] = 0
+	}
+
 	tick := time.Tick(rf.heartbeatTimeout)
 	for {
 		select {
@@ -207,14 +249,60 @@ func (rf *Raft) leader() {
 	}
 }
 
+// broadcast appendEntries
+func (rf *Raft) broadcastAppendEntries(entries []Log) (agree bool) {
+	preLog := rf.log[entries[0].Index-1]
+	args := AppendEntriesArgs{
+		Term:         rf.currentTerm,
+		LeaderID:     rf.me,
+		PrevLogIndex: preLog.Index,
+		PrevLogTerm:  preLog.Term,
+		LeaderCommit: rf.commitIndex,
+		Entries:      entries,
+	}
+
+	// broadcast
+	var count int = 1
+	for server := range rf.peers {
+		if server != rf.me && rf.status == LEADER {
+			reply := AppendEntriesReply{}
+			ok := rf.sendAppendEntries(server, &args, &reply)
+			if ok {
+				if reply.Term > rf.currentTerm {
+					rf.resetTermAndToFollower(reply.Term)
+					break
+				}
+				if reply.Success {
+					count++
+				}
+			} else {
+				// fail, retry
+			}
+		}
+	}
+
+	if rf.status == LEADER && count > len(rf.peers)/2 {
+		agree = true
+	} else {
+		agree = false
+	}
+	return
+}
+
 // leader broadcast heartbeat to follower or candidate
 func (rf *Raft) broadcastHeartbeat() {
+	lastLogIndex := len(rf.log) - 1
+
 	for server := range rf.peers {
 		if server != rf.me && rf.status == LEADER {
 			var args AppendEntriesArgs
 			args.Term = rf.currentTerm
 			args.LeaderID = rf.me
+			args.LeaderCommit = rf.commitIndex
 
+			if lastLogIndex >= rf.nextIndex[server] {
+				args.Entries = rf.log[rf.nextIndex[server]:lastLogIndex]
+			}
 			var reply AppendEntriesReply
 			DPrintf("leader-%v send heartbeat to server-%v\n", rf.me, server)
 			ok := rf.sendAppendEntries(server, &args, &reply)
@@ -226,6 +314,14 @@ func (rf *Raft) broadcastHeartbeat() {
 					DPrintf("leader-%v reset term and convert to follower\n", rf.me)
 					rf.resetTermAndToFollower(reply.Term)
 					break
+				}
+				if reply.Success {
+					//If successful: update nextIndex and matchIndex for follower
+					rf.nextIndex[server] = lastLogIndex + 1
+					rf.matchIndex[server] = lastLogIndex
+				} else {
+					// If AppendEntries fails because of log inconsistency:decrement nextIndex and retry
+					rf.nextIndex[server]--
 				}
 			} else {
 				//fail, retry?
@@ -277,6 +373,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.peers = peers
 	rf.persister = persister
 	rf.me = me
+	rf.applyCh = applyCh
 
 	// Your initialization code here (2A, 2B, 2C).
 	rf.currentTerm = 0
@@ -284,7 +381,9 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.voteFor = -1
 	rf.commitIndex = 0
 	rf.lastApplied = 0
-	rf.log = []Log{{index: 0, Term: 0}}
+	rf.nextIndex = make([]int, len(rf.peers))
+	rf.matchIndex = make([]int, len(rf.peers))
+	rf.log = []Log{{Index: 0, Term: 0}}
 	rf.heartbeatCh = make(chan bool)
 	rf.voteResultCh = make(chan bool)
 	rf.heartbeatTimeout = 300 * time.Millisecond
