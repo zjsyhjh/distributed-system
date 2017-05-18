@@ -5,10 +5,11 @@ import (
 	"time"
 )
 
-type Status int
-
+/*
+ * server status
+ */
 const (
-	FOLLOWER Status = iota
+	FOLLOWER = iota
 	CANDIDATE
 	LEADER
 )
@@ -58,4 +59,18 @@ func (rf *Raft) resetElectionTimeout() time.Duration {
 	rand.Seed(time.Now().UTC().UnixNano())
 	rf.randomizedElectionTimeout = rf.electionTimeout/2 + time.Duration(rand.Int63n(rf.electionTimeout.Nanoseconds()))
 	return rf.randomizedElectionTimeout
+}
+
+func (rf *Raft) minInt(x, y int) int {
+	if x < y {
+		return x
+	}
+	return y
+}
+
+func (rf *Raft) maxInt(x, y int) int {
+	if x > y {
+		return x
+	}
+	return y
 }
