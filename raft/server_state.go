@@ -34,12 +34,11 @@ func (rf *Raft) candidate() {
 	//third, wait for vote result
 	select {
 	case becomeLeader := <-rf.voteResultCh:
-		//become leader
+		//after become leader, broadcast
 		if becomeLeader {
 			DPrintf("candidate-%v convert to leader\n", rf.me)
 			rf.convertToLeaderAndInitState()
-			go rf.broadcastHeartbeatRPC()
-
+			go rf.broadcastAppendEntriesRPC()
 		}
 	//leader election again
 	case <-time.After(rf.resetElectionTimeout()):
