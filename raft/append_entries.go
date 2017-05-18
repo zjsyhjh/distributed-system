@@ -1,17 +1,17 @@
 package raft
 
-//
-// add Log struct
-//
+/*
+ * add Log struct
+ */
 type Log struct {
 	Index int
 	Term  int
 	Cmd   interface{}
 }
 
-//
-// add AppendEntriesArgs RPC struct
-//
+/*
+ * add AppendEntriesArgs struct
+ */
 type AppendEntriesArgs struct {
 	Term         int   // leader's term
 	LeaderID     int   // so follow can redirect clients
@@ -21,27 +21,47 @@ type AppendEntriesArgs struct {
 	Entries      []Log //log entries for store(empty for heartbeat)
 }
 
-//
-// add AppendEntriesReply struct
-//
+/*
+ * add AppendEntriesReply struct
+ */
 type AppendEntriesReply struct {
 	Term    int
 	Success bool
 }
 
-//
-// my code for sendAppendEntries
-//
+/*
+ * sendAppendEntries to specified server
+ */
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
 	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+	if ok {
+		if reply.Term > rf.currentTerm {
+			rf.resetTermAndToFollower(reply.Term)
+		} else if reply.Success {
+			//update nextIndex and matchIndex
+			rf.mu.Lock()
+			rf.nextIndex[server] = args.PrevLogIndex + len(args.Entries) + 1
+			rf.matchIndex[server] = rf.nextIndex[server] - 1
+			rf.mu.Unlock()
+			//update commitIndex
+			rf.updateCommitIndex()
+		} else {
+			rf.mu.Lock()
+			rf.nextIndex[server]--
+			rf.mu.Unlock()
+		}
+	}
 	return ok
 }
 
-//
-// my code for AppendEntries
-//
+/*
+ * AppendEntries on specified server
+ */
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
-	DPrintf("peer-%v append entries from leader-%v\n", rf.me, args.LeaderID)
+
+	go func() {
+		rf.heartbeatCh <- true
+	}()
 
 	reply.Term = rf.currentTerm
 
@@ -52,62 +72,86 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	}
 
 	if args.Term > rf.currentTerm {
-		DPrintf("server-%v reset term and convert to follower\n", rf.me)
+		DPrintf("server-%v update it's term \n", rf.me)
 		rf.resetTermAndToFollower(args.Term)
-	}
-	//
-	go func() {
-		rf.heartbeatCh <- true
-	}()
-
-	rf.mu.Lock()
-	if args.LeaderCommit > rf.commitIndex {
-		rf.commitIndex = args.LeaderCommit
-		go rf.checkCommitIndexAndApplied()
-	}
-	rf.mu.Unlock()
-
-	//if entries is empty, heartbeat
-	if len(args.Entries) == 0 {
-		reply.Success = true
 		return
 	}
 
-	// replica log
-	if args.PrevLogIndex > len(rf.log) || rf.log[args.PrevLogIndex].Term != args.PrevLogTerm {
-		// reply false if log doesn't contain an entry at prevLogIndex whose term matches prevLogTerm
+	if args.PrevLogIndex < len(rf.log) && args.Term != rf.log[args.PrevLogIndex].Term {
 		reply.Success = false
-	} else {
+		return
+	}
+
+	reply.Success = true
+	//if entries is empty, heartbeat
+	//if len(args.Entries) == 0 {
+	//	reply.Success = true
+	//	return
+	//}
+
+	if len(args.Entries) > 0 {
+		rf.mu.Lock()
 		firstEntry := args.Entries[0]
+		//If an existing entry conflicts with a new one (same index
+		//but different terms), delete the existing entry and all that
 		if len(rf.log) > firstEntry.Index {
 			rf.log = rf.log[:(firstEntry.Index - 1)]
 		}
 		rf.log = append(rf.log, args.Entries...)
-		reply.Success = true
+		rf.mu.Unlock()
 	}
-	return
+	//If leaderCommit > commitIndex, set commitIndex =
+	//min(leaderCommit, index of last new entry)
+	if args.LeaderCommit > rf.commitIndex {
+		rf.mu.Lock()
+		rf.commitIndex = rf.minInt(args.LeaderCommit, len(rf.log)-1)
+		rf.mu.Unlock()
+	}
 }
 
-//
-// if commitIndex > lastApplied, commit the entries between [lastApplied + 1, commmitIndex]
-//
-func (rf *Raft) checkCommitIndexAndApplied() {
-	if rf.commitIndex > rf.lastApplied {
-		commitIndex := rf.commitIndex
-		lastApplied := rf.lastApplied
-
-		rf.mu.Lock()
-		rf.lastApplied = rf.commitIndex
-		rf.mu.Unlock()
-		// commit the entries between [lastApplied + 1, commitIndex]
-		for index := lastApplied + 1; index <= commitIndex; index++ {
-			msg := ApplyMsg{
-				Index:   rf.log[index].Index,
-				Command: rf.log[index].Cmd,
-			}
-			go func() {
-				rf.applyCh <- msg
-			}()
+/*
+ * leader braodcast AppendEntriesRPC
+ */
+func (rf *Raft) broadcastAppendEntriesRPC() {
+	for server := range rf.peers {
+		if server != rf.me && rf.status == LEADER {
+			//send entries in parallel
+			go func(server int) {
+				prevLogIndex := rf.nextIndex[server] - 1
+				//if entries is empty, means heartbeat
+				args := AppendEntriesArgs{
+					Term:         rf.currentTerm,
+					LeaderID:     rf.me,
+					LeaderCommit: rf.commitIndex,
+					PrevLogIndex: prevLogIndex,
+					PrevLogTerm:  rf.log[prevLogIndex].Term,
+					Entries:      rf.log[(prevLogIndex + 1):],
+				}
+				reply := AppendEntriesReply{}
+				DPrintf("leader-%v sendAppendEntries to server-%v\n", rf.me, server)
+				rf.sendAppendEntries(server, &args, &reply)
+			}(server)
 		}
 	}
+}
+
+/*
+ * update commotIndex
+ */
+func (rf *Raft) updateCommitIndex() {
+	rf.mu.Lock()
+	newCommitIndex := rf.commitIndex
+	nCount := 0
+	for _, matchIndex := range rf.matchIndex {
+		if matchIndex > rf.commitIndex {
+			nCount++
+			if newCommitIndex == rf.commitIndex || matchIndex < newCommitIndex {
+				newCommitIndex = matchIndex
+			}
+		}
+	}
+	if nCount > len(rf.peers)/2 && rf.status == LEADER {
+		rf.commitIndex = newCommitIndex
+	}
+	rf.mu.Unlock()
 }
