@@ -46,6 +46,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	reply.Term = rf.currentTerm
 
 	if args.Term < rf.currentTerm {
+		//reply false if term < currentTerm
 		reply.Success = false
 		return
 	}
@@ -74,6 +75,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	// replica log
 	if args.PrevLogIndex > len(rf.log) || rf.log[args.PrevLogIndex].Term != args.PrevLogTerm {
+		// reply false if log doesn't contain an entry at prevLogIndex whose term matches prevLogTerm
 		reply.Success = false
 	} else {
 		firstEntry := args.Entries[0]
@@ -87,6 +89,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 }
 
 //
+// if commitIndex > lastApplied, commit the entries between [lastApplied + 1, commmitIndex]
+//
 func (rf *Raft) checkCommitIndexAndApplied() {
 	if rf.commitIndex > rf.lastApplied {
 		commitIndex := rf.commitIndex
@@ -95,7 +99,7 @@ func (rf *Raft) checkCommitIndexAndApplied() {
 		rf.mu.Lock()
 		rf.lastApplied = rf.commitIndex
 		rf.mu.Unlock()
-
+		// commit the entries between [lastApplied + 1, commitIndex]
 		for index := lastApplied + 1; index <= commitIndex; index++ {
 			msg := ApplyMsg{
 				Index:   rf.log[index].Index,
