@@ -104,7 +104,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 }
 
 // candidate broadcast and request for vote
-func (rf *Raft) broadcastRequestVote() {
+func (rf *Raft) broadcastRequestVoteRPC() {
 	for server := range rf.peers {
 		if server != rf.me && rf.status == CANDIDATE {
 			var args RequestVoteArgs

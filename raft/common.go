@@ -5,10 +5,6 @@ import (
 	"time"
 )
 
-/*
- My code for lab-2
-*/
-
 type Status int
 
 const (
@@ -29,10 +25,15 @@ func (rf *Raft) convertToFollower() {
 	rf.mu.Unlock()
 }
 
-func (rf *Raft) convertToLeader() {
+func (rf *Raft) convertToLeaderAndInitState() {
 	rf.mu.Lock()
 	rf.status = LEADER
 	rf.mu.Unlock()
+	maxIndex := len(rf.log)
+	for server := range rf.peers {
+		rf.nextIndex[server] = maxIndex
+		rf.matchIndex[server] = 0
+	}
 }
 
 func (rf *Raft) resetTermAndToFollower(term int) {

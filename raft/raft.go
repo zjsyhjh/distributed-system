@@ -184,71 +184,6 @@ func (rf *Raft) Kill() {
 	// Your code here, if desired.
 }
 
-// candidat -> elect  leader
-func (rf *Raft) leaderElection() {
-	hasLeader := false
-	for {
-		select {
-		case <-rf.heartbeatCh:
-			hasLeader = true
-		default:
-		}
-
-		if hasLeader {
-			break
-		}
-		if rf.status != CANDIDATE {
-			break
-		}
-		// first, increase currentTerm, vote
-		rf.vote(rf.me)
-
-		// second, broadcast and request vote
-		go rf.broadcastRequestVote()
-
-		//third, wait for result
-		select {
-		case <-rf.voteResultCh:
-			{
-				hasLeader = true
-				DPrintf("candidate-%v convert to leader\n", rf.me)
-				rf.convertToLeader()
-			}
-		case <-rf.heartbeatCh:
-			hasLeader = true
-			DPrintf("candidate-%v convert to follower\n", rf.me)
-			rf.convertToFollower()
-		case <-time.After(rf.resetElectionTimeout()):
-			//leader election again
-		}
-		if hasLeader {
-			break
-		}
-	}
-}
-
-// leader broadcast heartbeat each heartbeatTimeout
-func (rf *Raft) leader() {
-	maxIndex := len(rf.log)
-	// init
-	for server := range rf.peers {
-		rf.nextIndex[server] = maxIndex
-		rf.matchIndex[server] = 0
-	}
-
-	tick := time.Tick(rf.heartbeatTimeout)
-	for {
-		select {
-		case <-tick:
-			DPrintf("leader-%v begin to broadcast heartbeat\n", rf.me)
-			go rf.broadcastHeartbeat()
-		}
-		if rf.status != LEADER {
-			break
-		}
-	}
-}
-
 // broadcast appendEntries
 func (rf *Raft) broadcastAppendEntries(entries []Log) (agree bool) {
 	preLog := rf.log[entries[0].Index-1]
@@ -262,7 +197,7 @@ func (rf *Raft) broadcastAppendEntries(entries []Log) (agree bool) {
 	}
 
 	// broadcast
-	var count int = 1
+	count := 1
 	for server := range rf.peers {
 		if server != rf.me && rf.status == LEADER {
 			reply := AppendEntriesReply{}
@@ -290,7 +225,7 @@ func (rf *Raft) broadcastAppendEntries(entries []Log) (agree bool) {
 }
 
 // leader broadcast heartbeat to follower or candidate
-func (rf *Raft) broadcastHeartbeat() {
+func (rf *Raft) broadcastHeartbeatRPC() {
 	lastLogIndex := len(rf.log) - 1
 
 	for server := range rf.peers {
@@ -310,17 +245,18 @@ func (rf *Raft) broadcastHeartbeat() {
 				if reply.Term > rf.currentTerm {
 					//convert to follower
 					DPrintf("leader-%v received reply from server-%v\n", rf.me, server)
-					DPrintf("reply.term is %v, larger than currentTerm %v\n", reply.Term, rf.currentTerm)
-					DPrintf("leader-%v reset term and convert to follower\n", rf.me)
+					DPrintf("reply.term is %v larger than currentTerm %v, leader-%v reset term and convert to follower\n", reply.Term, rf.currentTerm, rf.me)
 					rf.resetTermAndToFollower(reply.Term)
 					break
 				}
 				if reply.Success {
 					//If successful: update nextIndex and matchIndex for follower
+					DPrintf("leader-%v appendEntries success.\n", rf.me)
 					rf.nextIndex[server] = lastLogIndex + 1
 					rf.matchIndex[server] = lastLogIndex
 				} else {
 					// If AppendEntries fails because of log inconsistency:decrement nextIndex and retry
+					DPrintf("leader-%v appendEntries fail.\n", rf.me)
 					rf.nextIndex[server]--
 				}
 			} else {
@@ -334,23 +270,10 @@ func (rf *Raft) backgroundLoop() {
 	for {
 		switch rf.status {
 		case FOLLOWER:
-			DPrintf("I'm follower-%v\n", rf.me)
-			DPrintf("Starting election timeout %v\n", rf.resetElectionTimeout())
-			// wait for leader's heartbeat or election timeout
-			select {
-			case <-time.After(rf.randomizedElectionTimeout):
-				{
-					DPrintf("election timeout %v\n", rf.randomizedElectionTimeout)
-					rf.convertToCandidate()
-				}
-			case <-rf.heartbeatCh:
-				// do nothing
-			}
+			rf.follower()
 		case CANDIDATE:
-			DPrintf("I'm candidate-%v\n", rf.me)
-			rf.leaderElection()
+			rf.candidate()
 		case LEADER:
-			DPrintf("I'm leader-%v\n", rf.me)
 			rf.leader()
 		}
 	}
@@ -386,7 +309,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.log = []Log{{Index: 0, Term: 0}}
 	rf.heartbeatCh = make(chan bool)
 	rf.voteResultCh = make(chan bool)
-	rf.heartbeatTimeout = 300 * time.Millisecond
+	rf.heartbeatTimeout = 50 * time.Millisecond
 	rf.electionTimeout = 600 * time.Millisecond
 
 	// initialize from state persisted before a crash
