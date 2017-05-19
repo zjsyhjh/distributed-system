@@ -2,6 +2,9 @@ package raft
 
 import "time"
 
+/*
+ * Followers only respond to requests from other servers(leader heartbeat or leader election)
+ */
 func (rf *Raft) follower() {
 	DPrintf("follower-%v starts election timeout %v\n", rf.me, rf.resetElectionTimeout())
 	// wait for leader's heartbeat or election timeout
@@ -14,9 +17,9 @@ func (rf *Raft) follower() {
 	}
 }
 
-//
-// leader election
-//
+/*
+ * leader election
+ */
 func (rf *Raft) candidate() {
 	DPrintf("candidate-%v\n", rf.me)
 	select {
@@ -48,9 +51,9 @@ func (rf *Raft) candidate() {
 	}
 }
 
-//
-// leader broadcast heartbeat each heartbeatTimeout
-//
+/*
+ * leader broadcast heartbeat each heartbeatTimeout
+ */
 func (rf *Raft) leader() {
 	DPrintf("leader-%v\n", rf.me)
 	tick := time.Tick(rf.heartbeatTimeout)
