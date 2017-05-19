@@ -86,14 +86,16 @@ func (rf *Raft) countVote() {
  */
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
+	currentTerm := rf.currentTerm
 	if args.Term > rf.currentTerm {
-		DPrintf("args.term is %v, server's currentTerm is %v\n", args.Term, rf.currentTerm)
-		DPrintf("server-%v resetTerm and convert to follower\n", rf.me)
-		rf.resetTermAndToFollower(args.Term)
+		if rf.status != FOLLOWER {
+			DPrintf("server-%v reset it's term and convert to follower\n", rf.me)
+			rf.resetTermAndToFollower(args.Term)
+		}
 	}
 	reply.Term = rf.currentTerm
 	//
-	if args.Term < rf.currentTerm {
+	if args.Term < currentTerm {
 		// previous request, no reply
 		reply.VoteGranted = false
 	} else if rf.voteFor != -1 && rf.voteFor != args.CandidateID {
@@ -115,7 +117,7 @@ func (rf *Raft) requestUpToDate(args *RequestVoteArgs) bool {
 	lastLog := rf.log[len(rf.log)-1]
 	argsLogIndex := args.LastLogIndex
 	argsLogTerm := args.LastLogTerm
-	return argsLogTerm > lastLog.Term || (argsLogTerm == lastLog.Term && argsLogIndex >= args.LastLogIndex)
+	return argsLogTerm > lastLog.Term || (argsLogTerm == lastLog.Term && argsLogIndex >= lastLog.Index)
 }
 
 /*

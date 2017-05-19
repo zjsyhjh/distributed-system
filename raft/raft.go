@@ -167,7 +167,7 @@ func (rf *Raft) Kill() {
 
 func (rf *Raft) replicatedStateMachine(applyCh chan ApplyMsg) {
 	for {
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond)
 		// log replicated
 		if rf.commitIndex > rf.lastApplied {
 			go func() {

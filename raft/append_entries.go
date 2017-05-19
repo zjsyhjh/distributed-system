@@ -80,24 +80,15 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		return
 	}
 
-	reply.Success = true
-	//if entries is empty, heartbeat
-	//if len(args.Entries) == 0 {
-	//	reply.Success = true
-	//	return
-	//}
-
-	if len(args.Entries) > 0 {
-		rf.mu.Lock()
-		firstEntry := args.Entries[0]
-		//If an existing entry conflicts with a new one (same index
-		//but different terms), delete the existing entry and all that
-		if len(rf.log) > firstEntry.Index {
-			rf.log = rf.log[:(firstEntry.Index - 1)]
-		}
+	rf.mu.Lock()
+	if len(rf.log) >= args.PrevLogIndex+1 {
+		rf.log = rf.log[:args.PrevLogIndex+1]
 		rf.log = append(rf.log, args.Entries...)
-		rf.mu.Unlock()
+		reply.Success = true
+	} else {
+		reply.Success = false
 	}
+	rf.mu.Unlock()
 	//If leaderCommit > commitIndex, set commitIndex =
 	//min(leaderCommit, index of last new entry)
 	if args.LeaderCommit > rf.commitIndex {
