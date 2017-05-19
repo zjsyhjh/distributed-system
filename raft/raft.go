@@ -71,8 +71,6 @@ type Raft struct {
 	electionTimeout           time.Duration
 	heartbeatTimeout          time.Duration
 	randomizedElectionTimeout time.Duration
-
-	applyCh chan ApplyMsg
 }
 
 // return currentTerm and whether this server
@@ -218,7 +216,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.peers = peers
 	rf.persister = persister
 	rf.me = me
-	rf.applyCh = applyCh
 
 	// Your initialization code here (2A, 2B, 2C).
 	rf.currentTerm = 0
@@ -232,7 +229,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.heartbeatCh = make(chan bool)
 	rf.voteResultCh = make(chan bool)
 	rf.heartbeatTimeout = 50 * time.Millisecond
-	rf.electionTimeout = 600 * time.Millisecond
+	rf.electionTimeout = 1000 * time.Millisecond
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())

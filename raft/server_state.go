@@ -55,16 +55,7 @@ func (rf *Raft) candidate() {
  * leader broadcast heartbeat each heartbeatTimeout
  */
 func (rf *Raft) leader() {
-	DPrintf("leader-%v\n", rf.me)
-	tick := time.Tick(rf.heartbeatTimeout)
-	for {
-		select {
-		case <-tick:
-			DPrintf("leader-%v begin to broadcast heartbeat\n", rf.me)
-			go rf.broadcastHeartbeatRPC()
-		}
-		if rf.status != LEADER {
-			break
-		}
-	}
+	time.Sleep(rf.heartbeatTimeout)
+	DPrintf("leader-%v begin to broadcast heartbeat\n", rf.me)
+	go rf.broadcastAppendEntriesRPC()
 }

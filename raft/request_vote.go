@@ -62,32 +62,44 @@ type RequestVoteReply struct {
 //
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
+	if ok {
+		if reply.Term > rf.currentTerm {
+			rf.resetTermAndToFollower(reply.Term)
+		} else if reply.VoteGranted && reply.Term == rf.currentTerm {
+			rf.countVote()
+			if rf.status == CANDIDATE && rf.votedCount > len(rf.peers)/2 {
+				rf.voteResultCh <- true
+			}
+		}
+	}
 	return ok
 }
 
-//
-// example RequestVote RPC handler.
-//
+func (rf *Raft) countVote() {
+	rf.mu.Lock()
+	rf.votedCount++
+	rf.mu.Unlock()
+}
+
+/*
+ * handle Request vote from candidate
+ */
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
-	DPrintf("peer-%v handle the RquestVote from candidate-%v\n", rf.me, args.CandidateID)
-
-	reply.Term = rf.currentTerm
-
 	if args.Term > rf.currentTerm {
 		DPrintf("args.term is %v, server's currentTerm is %v\n", args.Term, rf.currentTerm)
 		DPrintf("server-%v resetTerm and convert to follower\n", rf.me)
 		rf.resetTermAndToFollower(args.Term)
 	}
+	reply.Term = rf.currentTerm
 	//
 	if args.Term < rf.currentTerm {
 		// previous request, no reply
 		reply.VoteGranted = false
 	} else if rf.voteFor != -1 && rf.voteFor != args.CandidateID {
-		DPrintf("server-%v votedFor candidate-%v\n", rf.me, rf.voteFor)
+		DPrintf("server-%v has votedFor candidate-%v\n", rf.me, rf.voteFor)
 		reply.VoteGranted = false
-	} else if rf.commitIndex != 0 && (args.LastLogTerm < rf.currentTerm || args.LastLogIndex < rf.commitIndex) {
-		// rf.commitIndex equals 0 means no logs
+	} else if !rf.requestUpToDate(args) {
 		DPrintf("candidate-%v's log is not at least up-to-date to current-server-%v's log\n", args.CandidateID, rf.me)
 		reply.VoteGranted = false
 	} else {
@@ -96,41 +108,33 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.mu.Unlock()
 		reply.VoteGranted = true
 	}
-	//received vote request
-	go func() {
-		rf.heartbeatCh <- true
-	}()
 	DPrintf("reply.VoteGrand = %v, RequestVote done.\n", reply.VoteGranted)
 }
 
-// candidate broadcast and request for vote
+func (rf *Raft) requestUpToDate(args *RequestVoteArgs) bool {
+	lastLog := rf.log[len(rf.log)-1]
+	argsLogIndex := args.LastLogIndex
+	argsLogTerm := args.LastLogTerm
+	return argsLogTerm > lastLog.Term || (argsLogTerm == lastLog.Term && argsLogIndex >= args.LastLogIndex)
+}
+
+/*
+ * candidate broadcast and request for vote
+ */
 func (rf *Raft) broadcastRequestVoteRPC() {
+	var args RequestVoteArgs
+	args.CandidateID = rf.me
+	args.Term = rf.currentTerm
+	args.LastLogIndex = len(rf.log) - 1
+	args.LastLogTerm = rf.log[len(rf.log)-1].Term
+
 	for server := range rf.peers {
 		if server != rf.me && rf.status == CANDIDATE {
-			var args RequestVoteArgs
-			args.Term = rf.currentTerm
-			args.CandidateID = rf.me
-
-			var reply RequestVoteReply
-			DPrintf("candidate-%v send RequestVote to peer-%v\n", rf.me, server)
-			ok := rf.sendRequestVote(server, &args, &reply)
-			if ok {
-				DPrintf("candidate-%v\n", rf.me)
-				if reply.Term > rf.currentTerm {
-					rf.resetTermAndToFollower(reply.Term)
-					break
-				} else if reply.VoteGranted {
-					rf.votedCount++
-				}
-			} else {
-				//fail, retry ?
-			}
+			go func(server int) {
+				var reply RequestVoteReply
+				DPrintf("candidate-%v send RequestVote to peer-%v\n", rf.me, server)
+				rf.sendRequestVote(server, &args, &reply)
+			}(server)
 		}
-	}
-	DPrintf("broadcastRequestVote done. candidate-%v's votedCount is %v\n", rf.me, rf.votedCount)
-	if rf.votedCount > len(rf.peers)/2 && rf.status == CANDIDATE {
-		go func() {
-			rf.voteResultCh <- true
-		}()
 	}
 }

@@ -59,9 +59,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
  */
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 
-	go func() {
-		rf.heartbeatCh <- true
-	}()
+	rf.heartbeatCh <- true
 
 	reply.Term = rf.currentTerm
 
@@ -77,7 +75,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		return
 	}
 
-	if args.PrevLogIndex < len(rf.log) && args.Term != rf.log[args.PrevLogIndex].Term {
+	if args.PrevLogIndex < len(rf.log) && args.PrevLogTerm != rf.log[args.PrevLogIndex].Term {
 		reply.Success = false
 		return
 	}
