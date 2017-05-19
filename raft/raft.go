@@ -61,8 +61,8 @@ type Raft struct {
 	nextIndex  []int // for each server, index of next log entry to send to that server(initialized to leader last log index + 1)
 	matchIndex []int // for each server, index of the highest log entry known to be replicated on server(initialized to 0, increases monotonically)
 
-	status     Status // Follower, candidate or leader
-	votedCount int    // vote count
+	status     int // Follower, candidate or leader
+	votedCount int // vote count
 	// from raft paper, if election timeout elapses without receiving AppendEntries
 	// RPC from current leader or granting vote to candidate: convert to candidate
 	heartbeatCh chan bool
@@ -135,42 +135,25 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index := -1
 	term := -1
 	isLeader := true
-
 	// Your code here (2B).
 	if rf.status != LEADER {
 		isLeader = false
 		return index, term, isLeader
 	}
-
-	go func(command interface{}) {
-		entry := Log{
-			Index: len(rf.log),
-			Term:  rf.currentTerm,
-			Cmd:   command,
-		}
-		//append entry
-		rf.log = append(rf.log, entry)
-		// a majority of servers agree
-		agree := rf.broadcastAppendEntries([]Log{entry})
-
-		if agree {
-			// if agree, then committed
-			rf.mu.Lock()
-			rf.commitIndex++
-			rf.lastApplied = rf.commitIndex
-			rf.nextIndex[rf.me] = len(rf.log)
-			rf.mu.Unlock()
-			msg := ApplyMsg{
-				Index:   entry.Index,
-				Command: entry.Cmd,
-			}
-			rf.applyCh <- msg
-		}
-
-	}(command)
-
+	rf.mu.Lock()
 	index = len(rf.log)
 	term = rf.currentTerm
+	entry := Log{
+		Index: index,
+		Term:  term,
+		Cmd:   command,
+	}
+	rf.log = append(rf.log, entry)
+	rf.nextIndex[rf.me] = index + 1
+	rf.mu.Unlock()
+	// broadcast RPC
+	go rf.broadcastAppendEntriesRPC()
+
 	return index, term, isLeader
 }
 
@@ -184,84 +167,23 @@ func (rf *Raft) Kill() {
 	// Your code here, if desired.
 }
 
-// broadcast appendEntries
-func (rf *Raft) broadcastAppendEntries(entries []Log) (agree bool) {
-	preLog := rf.log[entries[0].Index-1]
-	args := AppendEntriesArgs{
-		Term:         rf.currentTerm,
-		LeaderID:     rf.me,
-		PrevLogIndex: preLog.Index,
-		PrevLogTerm:  preLog.Term,
-		LeaderCommit: rf.commitIndex,
-		Entries:      entries,
-	}
-
-	// broadcast
-	count := 1
-	for server := range rf.peers {
-		if server != rf.me && rf.status == LEADER {
-			reply := AppendEntriesReply{}
-			ok := rf.sendAppendEntries(server, &args, &reply)
-			if ok {
-				if reply.Term > rf.currentTerm {
-					rf.resetTermAndToFollower(reply.Term)
-					break
+func (rf *Raft) replicatedStateMachine(applyCh chan ApplyMsg) {
+	for {
+		time.Sleep(100 * time.Millisecond)
+		// log replicated
+		if rf.commitIndex > rf.lastApplied {
+			go func() {
+				commitIndex := rf.commitIndex
+				lastApplied := rf.lastApplied
+				rf.lastApplied = rf.commitIndex
+				for index := lastApplied + 1; index <= commitIndex; index++ {
+					msg := ApplyMsg{
+						Index:   rf.log[index].Index,
+						Command: rf.log[index].Cmd,
+					}
+					applyCh <- msg
 				}
-				if reply.Success {
-					count++
-				}
-			} else {
-				// fail, retry
-			}
-		}
-	}
-
-	if rf.status == LEADER && count > len(rf.peers)/2 {
-		agree = true
-	} else {
-		agree = false
-	}
-	return
-}
-
-// leader broadcast heartbeat to follower or candidate
-func (rf *Raft) broadcastHeartbeatRPC() {
-	lastLogIndex := len(rf.log) - 1
-
-	for server := range rf.peers {
-		if server != rf.me && rf.status == LEADER {
-			var args AppendEntriesArgs
-			args.Term = rf.currentTerm
-			args.LeaderID = rf.me
-			args.LeaderCommit = rf.commitIndex
-
-			if lastLogIndex >= rf.nextIndex[server] {
-				args.Entries = rf.log[rf.nextIndex[server]:lastLogIndex]
-			}
-			var reply AppendEntriesReply
-			DPrintf("leader-%v send heartbeat to server-%v\n", rf.me, server)
-			ok := rf.sendAppendEntries(server, &args, &reply)
-			if ok {
-				if reply.Term > rf.currentTerm {
-					//convert to follower
-					DPrintf("leader-%v received reply from server-%v\n", rf.me, server)
-					DPrintf("reply.term is %v larger than currentTerm %v, leader-%v reset term and convert to follower\n", reply.Term, rf.currentTerm, rf.me)
-					rf.resetTermAndToFollower(reply.Term)
-					break
-				}
-				if reply.Success {
-					//If successful: update nextIndex and matchIndex for follower
-					DPrintf("leader-%v appendEntries success.\n", rf.me)
-					rf.nextIndex[server] = lastLogIndex + 1
-					rf.matchIndex[server] = lastLogIndex
-				} else {
-					// If AppendEntries fails because of log inconsistency:decrement nextIndex and retry
-					DPrintf("leader-%v appendEntries fail.\n", rf.me)
-					rf.nextIndex[server]--
-				}
-			} else {
-				//fail, retry?
-			}
+			}()
 		}
 	}
 }
@@ -316,6 +238,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.readPersist(persister.ReadRaftState())
 	// start goroutine
 	go rf.backgroundLoop()
+	// replicated state machine
+	go rf.replicatedStateMachine(applyCh)
 
 	return rf
 }
