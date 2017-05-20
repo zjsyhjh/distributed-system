@@ -171,13 +171,15 @@ func (rf *Raft) replicatedStateMachine(applyCh chan ApplyMsg) {
 		// log replicated
 		if rf.commitIndex > rf.lastApplied {
 			go func() {
+				rf.mu.Lock()
 				commitIndex := rf.commitIndex
 				lastApplied := rf.lastApplied
 				rf.lastApplied = rf.commitIndex
-				for index := lastApplied + 1; index <= commitIndex; index++ {
+				rf.mu.Unlock()
+				for i := lastApplied + 1; i <= commitIndex; i++ {
 					msg := ApplyMsg{
-						Index:   rf.log[index].Index,
-						Command: rf.log[index].Cmd,
+						Index:   rf.log[i].Index,
+						Command: rf.log[i].Cmd,
 					}
 					applyCh <- msg
 				}
