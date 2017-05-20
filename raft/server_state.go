@@ -22,6 +22,7 @@ func (rf *Raft) follower() {
  */
 func (rf *Raft) candidate() {
 	DPrintf("candidate-%v\n", rf.me)
+	//clean raft channel
 	select {
 	case <-rf.voteResultCh:
 	case <-rf.heartbeatCh:
