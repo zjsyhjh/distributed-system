@@ -131,11 +131,11 @@ func (rf *Raft) updateCommitIndex() {
 	rf.mu.Lock()
 	newCommitIndex := rf.commitIndex
 	nCount := 0
-	for _, matchIndex := range rf.matchIndex {
-		if matchIndex > rf.commitIndex {
+	for _, logIndex := range rf.nextIndex {
+		if logIndex-1 > rf.commitIndex {
 			nCount++
-			if newCommitIndex == rf.commitIndex || matchIndex < newCommitIndex {
-				newCommitIndex = matchIndex
+			if newCommitIndex == rf.commitIndex || newCommitIndex > logIndex-1 {
+				newCommitIndex = logIndex - 1
 			}
 		}
 	}
